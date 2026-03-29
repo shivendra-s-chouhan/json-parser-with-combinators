@@ -1,8 +1,31 @@
-module JsonParser ()
+{-# LANGUAGE InstanceSigs #-}
+module JsonParser (jsonValue
+                  , ParseError(..)
+                  , runParser
+                  , JsonValue(..)
+                  , char
+                  , space
+                  , digit
+                  , string
+                  , spaces
+                  , symbol
+                  , between
+                  , brackets
+                  , braces
+                  , jsonNumber
+                  , jsonBool
+                  , jsonString
+                  , jsonObject
+                  , jsonArray
+                  , eof
+                  , try
+                  )
    where
 
 import Control.Applicative(Alternative(..))
-import Control.Applicative (Applicative(..))
+import Control.Applicative ()
+import Data.HashMap.Strict (HashMap, fromList)
+import Data.Char (isSpace, isDigit)
 
 
 
@@ -12,8 +35,10 @@ newtype Parser a = Parser { runParser :: String -> (String, Either ParseError a)
 data ParseError = ParseError String
                 deriving (Show, Eq)
 
+      
+
 instance Functor Parser where
-  fmap f (Parser p) = Parser $ \input ->     -- (Parser p) is unwrapping the Parser to get the function p
+  fmap f (Parser p) = Parser $ \input ->     -- (Parser p) is syntax for unwrapping the Parser to get the function p
     let (rest, result) = p input
     in (rest, case result of 
         Left err -> Left err
@@ -52,15 +77,22 @@ instance Applicative Parser where
                 Left err -> (rest2, Left err) -- If the second parser fails, we return that error.
                 Right a -> (rest2, Right (f a)) 
   Parser a *> Parser b = Parser $ \input ->
-    let (rest1, resultB) = b input
-    in case resultB of
-        Left err -> (rest1, Left err) -- If the second parser fails, we return that error.
-        Right x -> (rest1, Right x) -- If the second parser succeeds, we return its result, ignoring the result of the first parser.
+    let (rest1, resultA) = a input
+    in case resultA of
+        Left err -> (rest1, Left err)
+        Right _ ->
+            let (rest2, resultB) = b rest1
+            in case resultB of
+                Left err -> (rest2, Left err)
+                Right x  -> (rest2, Right x)
   Parser a <* Parser b = Parser $ \input ->
     let (rest1, resultA) = a input
     in case resultA of
         Left err -> (rest1, Left err) -- If the first parser fails, we return that error. 
-        Right a -> (rest1, Right a) -- If the first parser succeeds, we return its result, ignoring the result of the second parser.
+        Right op -> 
+          case b rest1 of
+              (rest2, Left err) -> (rest2, Left err)
+              (rest2, Right _)  -> (rest2, Right op)
   
  {-- 
   a <$ Parser b = Parser $ \input -> 
@@ -72,7 +104,7 @@ instance Applicative Parser where
 
 -- >>= = “run a parser, take its result, and use it to decide what parser to run next”
 instance Monad Parser where
-  return x = Parser $ \input -> (input, Right x) -- return is the same as pure, it takes a value and returns a Parser that produces that value without consuming any input. 
+  return = pure 
 
   (>>=) (Parser p) f = Parser $ \input -> 
     let (rest, result) = p input 
@@ -83,7 +115,7 @@ instance Monad Parser where
 -- try is a combinator that allows us to attempt a parser and, if it fails, to backtrack and try another parser without consuming any input. This is useful for handling alternatives in our grammar. For example, if we have a parser that tries to parse a number but fails, we can use try to backtrack and attempt to parse a string instead.
 try :: Parser a -> Parser a
 try (Parser p) = Parser $ \input -> case p input of
-    (rest, Left err) -> (input, Left err) -- If the parser fails, we return the original input and the error
+    (_, Left err) -> (input, Left err) -- If the parser fails, we return the original input and the error
     success -> success -- If the parser succeeds, we return its result as is.
 
 
@@ -105,92 +137,110 @@ choice name = foldr (<|>) noMatch
 
 satisfy :: String -> (Char -> Bool) -> Parser Char
 satisfy name predicate = try $ do
-    c <- any_
+    c <- any_  -- '<-' extracts Char from Parser Char 
     if predicate c
-        then return c
+        then return c  -- "return" converts Char back into Parser Char, this is possible because Parser is an instance of Monad
         else Parser $ \input -> (input, Left (ParseError $ "Expected " ++ name ++ ", but got '" ++ [c] ++ "'"))
 
 
-many :: Parser a -> Parser [a]
-many p = many1 p <|> pure [] -- many tries to apply the parser p one or more times, and if it fails, it returns an empty list.
-many1 :: Parser a -> Parser [a]
-many1 p = do 
+many_ :: Parser a -> Parser [a]
+many_ p = many1_ p <|> pure [] -- many_ tries to apply the parser p zero or more times, and if it fails, it returns an empty list.
+many1_ :: Parser a -> Parser [a]
+many1_ p = do 
     first <- p 
-    rest <- many p 
-    return (first : rest) -- many1 requires at least one successful parse of p. It first parses one instance of p to get the "first" value, and then it uses many to parse zero or more additional instances of p to get the "rest" of the list. Finally, it combines the first value with the rest of the list and returns it as a single list.
+    rest <- many_ p 
+    return (first : rest) -- many1_ requires at least one successful parse of p. It first parses one instance of p to get the "first" value, and then it uses many_ to parse zero or more additional instances of p to get the "rest" of the list. Finally, it combines the first value with the rest of the list and returns it as a single list.
 
 sepBy :: Parser a -> Parser sep -> Parser [a]
-sepBy p sep = sepBy1 p sep <|> pure [] -- sepBy tries to parse one or more instances of p separated by sep. If it fails, it returns an empty list.
+sepBy p sep = sepBy1 p sep <|> pure [] -- sepBy tries to parse zeor or more instances of p separated by sep. If it fails, it returns an empty list.
 sepBy1 :: Parser a -> Parser sep -> Parser [a]
 sepBy1 p sep = do
     first <- p
-    rest <- many (sep *> p) -- sepBy1 requires at least one successful parse of p. It first parses one instance of p to get the "first" value, and then it uses many to parse zero or more additional instances of p, each preceded by the separator sep. The expression (sep *> p) means that we first parse the separator and then parse another instance of p, but we ignore the result of the separator and only keep the result of p.
+    rest <- many_ (sep >> p) -- sepBy1 requires at least one successful parse of p. It first parses one instance of p to get the "first" value, and then it uses many_ to parse zero or more additional instances of p, each preceded by the separator sep. The expression (sep *> p) means that we first parse the separator and then parse another instance of p, but we ignore the result of the separator and only keep the result of p.
     return (first : rest) -- Finally, it combines the first value with the rest of the list and returns it as a single list.
 
   
 data JsonValue = JsonString String
                | JsonNumber Double
-               | JsonObject HashMap String JsonValue
+               | JsonObject (HashMap String JsonValue)
                | JsonArray [JsonValue]
                | JsonBool Bool
                | JsonNull
                deriving (Show, Eq)
 
+char :: Char -> Parser Char
 char c = satisfy [c] (== c) -- char is a parser that takes a character c and returns a parser that succeeds if the next character in the input is c, and fails otherwise. It uses the satisfy function to check if the next character matches c.
 
+space :: Parser Char
 space = satisfy "whitespace" isSpace -- space is a parser that succeeds if the next character in the input is a whitespace character (such as space, tab, or newline), and fails otherwise. It uses the satisfy function with the isSpace predicate to check for whitespace characters.
 
-digit = satisfy "digit" isDigit -- digit is a parser that succeeds if the next character in the input is a digit (0-9), and fails otherwise. It uses the satisfy function with the isDigit predicate to check for digit characters.
+isNumChar :: Char -> Bool
+isNumChar c = isDigit c || c == 'e' || c == 'E' || c == '+' || c == '-' || c == '.' 
 
+digit :: Parser Char
+digit = satisfy "numChar" isNumChar -- digit is a parser that succeeds if the next character in the input is a digit (0-9), and fails otherwise. It uses the satisfy function with the isDigit predicate to check for digit characters.
+
+string :: [Char] -> Parser [Char]
 string = traverse char -- string is a parser that takes a string as input and returns a parser that succeeds if the next characters in the input match the given string, and fails otherwise. It uses the traverse function to apply the char parser to each character in the input string, effectively checking for a sequence of characters.
-  
-spaces = many space -- spaces is a parser that succeeds if the next characters in the input are zero or more whitespace characters, and fails otherwise. It uses the many combinator to apply the space parser repeatedly until it fails, effectively consuming all leading whitespace characters.
 
+spaces :: Parser [Char] 
+spaces = many_ space -- spaces is a parser that succeeds if the next characters in the input are zero or more whitespace characters, and fails otherwise. It uses the many_ combinator to apply the space parser repeatedly until it fails, effectively consuming all leading whitespace characters.
+
+symbol :: [Char] -> Parser [Char]
 symbol s = string s <* spaces -- symbol is a parser that takes a string s and returns a parser that succeeds if the next characters in the input match s, followed by zero or more whitespace characters. It uses the string parser to check for the exact sequence of characters in s, and then it uses the <* operator to consume any trailing whitespace after successfully matching s.
 
+between :: Applicative f => f a1 -> f b -> f a2 -> f a2
 between open close value = open *> value <* close -- between is a combinator that takes three parsers: open, close, and value. It returns a parser that succeeds if the input starts with the open parser, followed by the value parser, and ends with the close parser. The *> operator is used to ignore the result of the open parser, and the <* operator is used to ignore the result of the close parser, so that only the result of the value parser is returned. This is useful for parsing structures that are enclosed by specific characters, such as parentheses or quotes.
 
 
+brackets :: Parser a -> Parser a
 brackets = between (symbol "[") (symbol "]") 
 
-braces = betwee (symbol "{") (symbol "}")
+braces :: Parser a -> Parser a
+braces = between (symbol "{") (symbol "}")
 
-jsonNumber = read <$> many1 digit -- jsonNumber is a parser that parses a sequence of digits and converts it into a Double. 
+jsonNumber :: Parser Double
+jsonNumber = read <$> many1_ digit -- jsonNumber is a parser that parses a sequence of digits and converts it into a Double. 
 
+jsonBool :: Parser Bool
 jsonBool = choice "JSON boolean"
   [True <$ symbol "true",
    False <$ symbol "false"] -- jsonBool is a parser that recognizes the literals "true" and "false" and returns the corresponding Boolean values. 
 
-jsonNull = JsonNull <$ symbol "null" -- jsonNull is a parser that recognizes the literal "null" and returns the JsonNull value.
 
-jsonString = between (char '"') (char '"') (many jsonChar) <* spaces 
+
+jsonString :: Parser [Char]
+jsonString = between (char '"') (char '"') (many_ jsonChar) <* spaces 
   where 
       jsonChar = choice "JSON string character"
         [try $ '\n' <$ string "\\n",
          try $ '\t' <$ string "\\t",
          try $ '\\' <$ string "\\\\",
          try $ '"'  <$ string "\\\"",
-         stisfy "non-quote, non-backslash character" (\c -> c /= '"' && c /= '\\')] 
+         satisfy "non-quote, non-backslash character" (\c -> c /= '"' && c /= '\\')] 
 
 
+jsonObject :: Parser (HashMap String JsonValue)
 jsonObject = do 
   assocList <- braces  $ jsonEntry `sepBy` symbol ","
   return $ fromList assocList
   where 
     jsonEntry = do 
       key <- jsonString
-      symbol ":"
+      _ <- symbol ":" -- this is to consume the colon that separates keys and values in a JSON object, but we ignore its result since we don't need to return it as part of our parsed data structure.
       value <- jsonValue
       return (key, value)
 
+jsonArray :: Parser [JsonValue]
 jsonArray = brackets $ jsonValue `sepBy` symbol "," 
 
 
+jsonValue :: Parser JsonValue
 jsonValue = choice "JSON value"
   [JsonString <$> jsonString,
    JsonNumber <$> jsonNumber,
    JsonObject <$> jsonObject,
    JsonArray <$> jsonArray,
    JsonBool <$> jsonBool,
-   JsonNull <$> jsonNull
+   JsonNull <$ symbol "null"
   ]

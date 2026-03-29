@@ -21,6 +21,8 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- containers  # for importing Data.Map in the library
+- unordered-containers  # for importing Data.HashMap in the library
 
 ghc-options:
 - -Wall
@@ -46,6 +48,7 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - json-parser-with-combinators
+    - containers  # Add this line to include the unordered-containers dependency in the executable
 
 tests:
   json-parser-with-combinators-test:
@@ -57,3 +60,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - json-parser-with-combinators
+    - hspec
