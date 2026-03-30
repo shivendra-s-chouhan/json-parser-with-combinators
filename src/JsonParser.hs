@@ -237,10 +237,10 @@ jsonArray = brackets $ jsonValue `sepBy` symbol ","
 
 jsonValue :: Parser JsonValue
 jsonValue = choice "JSON value"
-  [JsonString <$> jsonString,
-   JsonNumber <$> jsonNumber,
-   JsonObject <$> jsonObject,
-   JsonArray <$> jsonArray,
-   JsonBool <$> jsonBool,
-   JsonNull <$ symbol "null"
+  [JsonObject <$> jsonObject
+  , JsonArray  <$> jsonArray
+  , JsonString <$> jsonString
+  , JsonNumber <$> jsonNumber
+  , JsonBool   <$> jsonBool
+  , JsonNull   <$  symbol "null"
   ]
